@@ -1,118 +1,265 @@
-// To avoid Uncaught DOMException while using Web Workers
-// Run python -m http.server 8000
-// https://stackoverflow.com/questions/8170431/using-web-workers-for-drawing-using-native-canvas-functions
-const worker = new Worker('./counter.js');
+const maxColorsSlider = document.getElementById('maxColors');
+const maxColorsValue = document.getElementById('maxColorsValue');
+const sortSelect = document.getElementById('sortBy');
 
-handleWorkerCompletion = (message) => {
-    if(message.data.command == "done") {
-        // draw color swatches
-        this.drawColorSwatch(message.data.colorCounts);
-        worker.removeEventListener("message", handleWorkerCompletion);
-                
-        // hide wait indicator
-        const waitIndicator = document.getElementById("wait-indicator");
-        waitIndicator.classList.add("invisible");
-        waitIndicator.classList.remove("fadein");
+let currentImageData = null;
+let currentColorCounts = null;
 
-        // scroll to color swatch section
-        const pixelCountContainer = document.getElementById('pixel-count-container'); 
-        pixelCountContainer.scrollIntoView({ behavior: 'smooth'});
-
-        const colorCountLabel = document.getElementById('color-count');
-        colorCountLabel.innerText = Object.keys(message.data.colorCounts).length;
+maxColorsSlider.addEventListener('input', (e) => {
+    maxColorsValue.textContent = e.target.value;
+    if (currentImageData) {
+        processImageData(currentImageData);
     }
-};
+});
 
-/**
- * Event listener for when the file upload has been updated
- */
+sortSelect.addEventListener('change', () => {
+    if (currentColorCounts) {
+        drawColorSwatch(currentColorCounts);
+    }
+});
+
 document.getElementById("image").addEventListener('change', (e) => {
-    this.loadImage(e.target.files[0]);
+    loadImage(e.target.files[0]);
 }, false);
 
-/**
- * Given a valid image file, load the image into the canvas
- * Good explantation the the image data: https://css-tricks.com/manipulating-pixels-using-canvas/#article-header-id-1
- */
-loadImage = (file) => {
+function loadImage(file) {
+    if (!file) return;
+    
     const url = window.URL.createObjectURL(file);
     const img = new Image();
     img.src = url;    
     img.onload = () => {
-        this.reset();
+        reset();
 
         const canvas = document.getElementById('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
 
-        const context = canvas.getContext('2d');  
+        const context = canvas.getContext('2d', { willReadFrequently: true });
         context.drawImage(img, 0, 0);   
                 
         const uploadContainer = document.getElementById('upload-container');        
         uploadContainer.appendChild(img);
 
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        currentImageData = context.getImageData(0, 0, canvas.width, canvas.height);
 
-        window.URL.revokeObjectURL(this.src);
-        worker.addEventListener("message", handleWorkerCompletion, false);
-        worker.postMessage({
-            "imageData": imageData.data
-        });
+        window.URL.revokeObjectURL(url);
         
-        const waitIndicator = document.getElementById("wait-indicator");
-        waitIndicator.classList.remove("invisible");
-        waitIndicator.classList.add("fadein");
+        showWaitIndicator();
+        setTimeout(() => processImageData(currentImageData), 50);
     }  
-};
+}
 
-/**
- * 
- */
-drawColorSwatch = (colorCount) => {
-    let colorSwatches = document.getElementById('color-swatches');
+function processImageData(imageData) {
+    const maxColors = parseInt(maxColorsSlider.value);
+    currentColorCounts = medianCutQuantization(imageData.data, maxColors);
+    
+    drawColorSwatch(currentColorCounts);
+    hideWaitIndicator();
+    
+    const colorCountLabel = document.getElementById('color-count');
+    colorCountLabel.innerText = Object.keys(currentColorCounts).length.toLocaleString();
+    
+    const totalPixels = Object.values(currentColorCounts).reduce((a, b) => a + b, 0);
+    document.getElementById('total-pixels').innerText = totalPixels.toLocaleString();
+    
+    const methodText = `Median Cut quantization - ${maxColorsSlider.value} color palette`;
+    document.getElementById('analysis-method').innerText = methodText;
 
-    for(const color in colorCount) {
+    const pixelCountContainer = document.getElementById('pixel-count-container'); 
+    pixelCountContainer.scrollIntoView({ behavior: 'smooth'});
+}
+
+function medianCutQuantization(data, maxColors) {
+    const pixels = [];
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const a = data[i + 3];
+        
+        if (a > 0) {
+            pixels.push({ r, g, b });
+        }
+    }
+
+    const initialBucket = {
+        pixels: pixels,
+        minR: Math.min(...pixels.map(p => p.r)),
+        maxR: Math.max(...pixels.map(p => p.r)),
+        minG: Math.min(...pixels.map(p => p.g)),
+        maxG: Math.max(...pixels.map(p => p.g)),
+        minB: Math.min(...pixels.map(p => p.b)),
+        maxB: Math.max(...pixels.map(p => p.b))
+    };
+
+    const buckets = [initialBucket];
+
+    while (buckets.length < maxColors) {
+        let maxRange = 0;
+        let bucketToSplit = 0;
+        
+        for (let i = 0; i < buckets.length; i++) {
+            const bucket = buckets[i];
+            const rRange = bucket.maxR - bucket.minR;
+            const gRange = bucket.maxG - bucket.minG;
+            const bRange = bucket.maxB - bucket.minB;
+            const range = Math.max(rRange, gRange, bRange);
+            
+            if (range > maxRange) {
+                maxRange = range;
+                bucketToSplit = i;
+            }
+        }
+
+        if (maxRange === 0) break;
+
+        const bucket = buckets[bucketToSplit];
+        const rRange = bucket.maxR - bucket.minR;
+        const gRange = bucket.maxG - bucket.minG;
+        const bRange = bucket.maxB - bucket.minB;
+
+        let sortKey;
+        if (rRange >= gRange && rRange >= bRange) {
+            sortKey = 'r';
+        } else if (gRange >= bRange) {
+            sortKey = 'g';
+        } else {
+            sortKey = 'b';
+        }
+
+        bucket.pixels.sort((a, b) => a[sortKey] - b[sortKey]);
+        const median = Math.floor(bucket.pixels.length / 2);
+        
+        const pixels1 = bucket.pixels.slice(0, median);
+        const pixels2 = bucket.pixels.slice(median);
+
+        if (pixels1.length === 0 || pixels2.length === 0) break;
+
+        const bucket1 = createBucket(pixels1);
+        const bucket2 = createBucket(pixels2);
+
+        buckets.splice(bucketToSplit, 1, bucket1, bucket2);
+    }
+
+    const result = {};
+    buckets.forEach(bucket => {
+        const avgR = Math.round(bucket.pixels.reduce((sum, p) => sum + p.r, 0) / bucket.pixels.length);
+        const avgG = Math.round(bucket.pixels.reduce((sum, p) => sum + p.g, 0) / bucket.pixels.length);
+        const avgB = Math.round(bucket.pixels.reduce((sum, p) => sum + p.b, 0) / bucket.pixels.length);
+        
+        const hex = '#' + [avgR, avgG, avgB].map(x => x.toString(16).padStart(2, '0')).join('');
+        result[hex] = bucket.pixels.length;
+    });
+
+    return result;
+}
+
+function createBucket(pixels) {
+    return {
+        pixels: pixels,
+        minR: Math.min(...pixels.map(p => p.r)),
+        maxR: Math.max(...pixels.map(p => p.r)),
+        minG: Math.min(...pixels.map(p => p.g)),
+        maxG: Math.max(...pixels.map(p => p.g)),
+        minB: Math.min(...pixels.map(p => p.b)),
+        maxB: Math.max(...pixels.map(p => p.b))
+    };
+}
+
+function drawColorSwatch(colorCounts) {
+    const colorSwatches = document.getElementById('color-swatches');
+    colorSwatches.innerHTML = '';
+
+    const sortBy = sortSelect.value;
+    const sortedEntries = Object.entries(colorCounts).sort((a, b) => {
+        switch(sortBy) {
+            case 'count-desc':
+                return b[1] - a[1];
+            case 'count-asc':
+                return a[1] - b[1];
+            case 'brightness':
+                return chroma(b[0]).luminance() - chroma(a[0]).luminance();
+            case 'hue':
+                const hueA = chroma(a[0]).hsl()[0] || 0;
+                const hueB = chroma(b[0]).hsl()[0] || 0;
+                return hueA - hueB;
+            default:
+                return b[1] - a[1];
+        }
+    });
+
+    const totalPixels = Object.values(colorCounts).reduce((a, b) => a + b, 0);
+
+    sortedEntries.forEach(([color, count]) => {
         const container = document.createElement("section");
         const swatch = document.createElement("div");
-        const colorCountLabel = document.createElement("span");
+        const colorInfo = document.createElement("div");
 
         container.classList.add("color-swatch-container");
 
         swatch.classList.add("color-swatch");
-        swatch.style.background = color;
-        swatch.title = color;
+        swatch.style.backgroundColor = color;
+        swatch.title = `Click to copy: ${color.toUpperCase()}`;
 
-        colorCountLabel.innerHTML = `: ${colorCount[color]}`;
+        const percentage = ((count / totalPixels) * 100).toFixed(2);
+        colorInfo.classList.add("color-info");
+        colorInfo.innerHTML = `
+            <div><strong>${color.toUpperCase()}</strong></div>
+            <div>${count.toLocaleString()} px (${percentage}%)</div>
+        `;
+
+        swatch.addEventListener('click', () => {
+            navigator.clipboard.writeText(color.toUpperCase()).then(() => {
+                swatch.style.transform = 'scale(1.1)';
+                swatch.style.boxShadow = '0 0 10px ' + color;
+                setTimeout(() => {
+                    swatch.style.transform = 'scale(1)';
+                    swatch.style.boxShadow = '';
+                }, 300);
+            }).catch(() => {
+                console.log('Copied:', color.toUpperCase());
+            });
+        });
 
         container.appendChild(swatch);
-        container.appendChild(colorCountLabel);
+        container.appendChild(colorInfo);
         colorSwatches.appendChild(container);
-    }
+    });
     
-    let pixelCountContainer = document.getElementById('pixel-count-container');
+    const pixelCountContainer = document.getElementById('pixel-count-container');
     pixelCountContainer.classList.remove('invisible');
-};
+}
 
-/**
- * Clear DOM of past color counting
- */
-reset = () => {
-    let pixelCountContainer = document.getElementById('pixel-count-container');
+function showWaitIndicator() {
+    const waitIndicator = document.getElementById("wait-indicator");
+    waitIndicator.classList.remove("invisible");
+    waitIndicator.classList.add("fadein");
+}
+
+function hideWaitIndicator() {
+    const waitIndicator = document.getElementById("wait-indicator");
+    waitIndicator.classList.add("invisible");
+    waitIndicator.classList.remove("fadein");
+}
+
+function reset() {
+    const pixelCountContainer = document.getElementById('pixel-count-container');
     pixelCountContainer.classList.add('invisible');
 
-    let colorSwatches = document.getElementById('color-swatches');
-    while (colorSwatches.firstChild) {
-        colorSwatches.removeChild(colorSwatches.firstChild);
-    }
+    const colorSwatches = document.getElementById('color-swatches');
+    colorSwatches.innerHTML = '';
     
-    let uploadContainer = document.getElementById('upload-container');
-    let image = uploadContainer.getElementsByTagName('img')[0];  
-
-    if (image) {
-        uploadContainer.removeChild(image);
+    const uploadContainer = document.getElementById('upload-container');
+    const existingImage = uploadContainer.querySelector('img:not([src*="ashley_sprite"])');
+    if (existingImage) {
+        uploadContainer.removeChild(existingImage);
     }
 
     const canvas = document.getElementById('canvas');
     const context = canvas.getContext('2d');  
     context.clearRect(0, 0, canvas.width, canvas.height);
+    
+    currentImageData = null;
+    currentColorCounts = null;
 }
