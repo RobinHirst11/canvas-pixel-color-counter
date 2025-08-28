@@ -5,7 +5,6 @@ Color analysis with smart quantization algorithms.
 ## Live Demo
 
 Visit the site: [Pixel Color Counter](https://robinsweb.site/canvas-pixel-color-counter)
-4. Calculates representative colors and pixel counts for each group
 
 ## Local Development
 
