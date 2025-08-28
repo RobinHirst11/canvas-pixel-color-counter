@@ -48,13 +48,18 @@
                 <div class="color-stats">
                     <p><strong><span id="color-count"></span></strong> colors • <strong><span id="total-pixels"></span></strong> pixels</p>
                     <p id="analysis-method"></p>
+                </div>
+                <div class="export-controls">
+                    <button id="export-csv" class="export-btn">Export CSV</button>
+                    <button id="export-json" class="export-btn">Export JSON</button>
+                    <button id="export-palette" class="export-btn">Export Palette PNG</button>
                 </div>           
                 <div id="color-swatches" class="color-swatches">
                 </div>
             </section> 
         </main>        
         <div id="wait-indicator" class="invisible">
-            <img src="assets/ashley_sprite.gif" alt="Loading">
+            <div class="spinner"></div>
             <p>Analyzing Colors...</p>
         </div> 
         <footer>

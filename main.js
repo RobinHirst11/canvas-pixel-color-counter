@@ -4,6 +4,7 @@ const sortSelect = document.getElementById('sortBy');
 
 let currentImageData = null;
 let currentColorCounts = null;
+let currentFileName = '';
 
 maxColorsSlider.addEventListener('input', (e) => {
     maxColorsValue.textContent = e.target.value;
@@ -19,8 +20,13 @@ sortSelect.addEventListener('change', () => {
 });
 
 document.getElementById("image").addEventListener('change', (e) => {
+    currentFileName = e.target.files[0]?.name || 'image';
     loadImage(e.target.files[0]);
 }, false);
+
+document.getElementById('export-csv').addEventListener('click', exportCSV);
+document.getElementById('export-json').addEventListener('click', exportJSON);
+document.getElementById('export-palette').addEventListener('click', exportPalette);
 
 function loadImage(file) {
     if (!file) return;
@@ -231,6 +237,122 @@ function drawColorSwatch(colorCounts) {
     pixelCountContainer.classList.remove('invisible');
 }
 
+function exportCSV() {
+    if (!currentColorCounts) return;
+
+    const sortBy = sortSelect.value;
+    const sortedEntries = Object.entries(currentColorCounts).sort((a, b) => {
+        switch(sortBy) {
+            case 'count-desc': return b[1] - a[1];
+            case 'count-asc': return a[1] - b[1];
+            case 'brightness': return chroma(b[0]).luminance() - chroma(a[0]).luminance();
+            case 'hue':
+                const hueA = chroma(a[0]).hsl()[0] || 0;
+                const hueB = chroma(b[0]).hsl()[0] || 0;
+                return hueA - hueB;
+            default: return b[1] - a[1];
+        }
+    });
+
+    const totalPixels = Object.values(currentColorCounts).reduce((a, b) => a + b, 0);
+    
+    let csv = 'Color,Hex,R,G,B,Pixel Count,Percentage\n';
+    
+    sortedEntries.forEach(([color, count], index) => {
+        const rgb = chroma(color).rgb();
+        const percentage = ((count / totalPixels) * 100).toFixed(2);
+        csv += `Color${index + 1},${color},${rgb[0]},${rgb[1]},${rgb[2]},${count},${percentage}%\n`;
+    });
+
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentFileName.replace(/\.[^/.]+$/, '')}_colors.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function exportJSON() {
+    if (!currentColorCounts) return;
+
+    const sortBy = sortSelect.value;
+    const sortedEntries = Object.entries(currentColorCounts).sort((a, b) => {
+        switch(sortBy) {
+            case 'count-desc': return b[1] - a[1];
+            case 'count-asc': return a[1] - b[1];
+            case 'brightness': return chroma(b[0]).luminance() - chroma(a[0]).luminance();
+            case 'hue':
+                const hueA = chroma(a[0]).hsl()[0] || 0;
+                const hueB = chroma(b[0]).hsl()[0] || 0;
+                return hueA - hueB;
+            default: return b[1] - a[1];
+        }
+    });
+
+    const totalPixels = Object.values(currentColorCounts).reduce((a, b) => a + b, 0);
+    
+    const data = {
+        image: currentFileName,
+        totalPixels,
+        totalColors: Object.keys(currentColorCounts).length,
+        quantizationMethod: 'Median Cut',
+        maxColors: parseInt(maxColorsSlider.value),
+        sortBy: sortSelect.value,
+        colors: sortedEntries.map(([color, count], index) => {
+            const rgb = chroma(color).rgb();
+            const hsl = chroma(color).hsl();
+            return {
+                name: `Color${index + 1}`,
+                hex: color,
+                rgb: { r: rgb[0], g: rgb[1], b: rgb[2] },
+                hsl: { h: hsl[0] || 0, s: hsl[1], l: hsl[2] },
+                pixelCount: count,
+                percentage: parseFloat(((count / totalPixels) * 100).toFixed(2))
+            };
+        })
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentFileName.replace(/\.[^/.]+$/, '')}_colors.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function exportPalette() {
+    if (!currentColorCounts) return;
+
+    const colors = Object.keys(currentColorCounts);
+    const cols = Math.ceil(Math.sqrt(colors.length));
+    const rows = Math.ceil(colors.length / cols);
+    const swatchSize = 64;
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * swatchSize;
+    canvas.height = rows * swatchSize;
+    const ctx = canvas.getContext('2d');
+    
+    colors.forEach((color, index) => {
+        const x = (index % cols) * swatchSize;
+        const y = Math.floor(index / cols) * swatchSize;
+        
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, swatchSize, swatchSize);
+    });
+
+    canvas.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentFileName.replace(/\.[^/.]+$/, '')}_palette.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+}
+
 function showWaitIndicator() {
     const waitIndicator = document.getElementById("wait-indicator");
     waitIndicator.classList.remove("invisible");
@@ -251,7 +373,7 @@ function reset() {
     colorSwatches.innerHTML = '';
     
     const uploadContainer = document.getElementById('upload-container');
-    const existingImage = uploadContainer.querySelector('img:not([src*="ashley_sprite"])');
+    const existingImage = uploadContainer.querySelector('img:not([src*="spinner"])');
     if (existingImage) {
         uploadContainer.removeChild(existingImage);
     }
